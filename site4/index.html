@@ -37,6 +37,37 @@
     font-weight:700;
   }
   .progress{ font-size:10.5px; color:#7a8279; }
+  .timer-badge{
+    display:inline-block;
+    margin-left:10px;
+    padding:2px 9px;
+    border-radius:10px;
+    font-size:11px;
+    font-weight:700;
+    background:var(--accent-soft);
+    color:var(--accent);
+    letter-spacing:.02em;
+  }
+  .timer-badge.warn{ background:#fbeae6; color:var(--error); }
+  .timeout-overlay{
+    position:fixed;
+    inset:0;
+    background:rgba(28,43,36,.55);
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    z-index:50;
+  }
+  .timeout-box{
+    background:#fff;
+    border-radius:2px;
+    padding:28px 36px;
+    text-align:center;
+    font-size:16px;
+    font-weight:700;
+    color:var(--error);
+    box-shadow:0 6px 24px rgba(0,0,0,.2);
+  }
   h1{
     font-size:15px;
     line-height:1.5;
@@ -219,8 +250,8 @@
 <script>
 (function(){
 
-  const GAS_URL = "https://script.google.com/macros/s/AKfycbzkWwIWaovkOpkjEITJRvqhfH77AdRkjcBjrg8mEVwezEYGr-u9Z3wTtp57ciri9StonA/exec";
-  const BASE_URL = "https://tomotakasuye191.github.io/CO-SE-ver2/";
+  const GAS_URL = "https://script.google.com/macros/s/【ここにver3用の新しいデプロイIDを貼る】/exec";
+  const BASE_URL = "https://tomotakasuye191.github.io/CO-SE-ver3/";
   const COMPLETE_URL = BASE_URL + "complete/index.html";
 
   const GOOD_LABELS = { yogurt:'ヨーグルト', rice:'お米', wine:'ワイン', chocolate:'チョコレート' };
@@ -374,6 +405,54 @@
     return idx === -1 ? null : idx + 1;
   }
 
+  // タイムプレッシャー版：CO画面（ラウンド1・ラウンド2）だけに設ける25秒のカウントダウン。
+  // onTick(残り秒数) を毎秒呼び出し、0になったらonTimeout()を1回だけ呼ぶ。
+  // 戻り値のclear()を呼べば、回答済み・画面遷移済みの際にタイマーを止められる。
+  const CO_TIME_LIMIT_SEC = 25;
+  function startCountdown(seconds, badgeEl, onTimeout){
+    let remaining = seconds;
+    let done = false;
+    function render(){
+      badgeEl.textContent = '⏱ 残り' + remaining + '秒';
+      badgeEl.classList.toggle('warn', remaining <= 10);
+    }
+    render();
+    const intervalId = setInterval(function(){
+      remaining -= 1;
+      if(remaining <= 0){
+        render();
+        finish();
+        return;
+      }
+      render();
+    }, 1000);
+    function finish(){
+      if(done) return;
+      done = true;
+      clearInterval(intervalId);
+      onTimeout();
+    }
+    return {
+      clear: function(){
+        if(done) return;
+        done = true;
+        clearInterval(intervalId);
+      }
+    };
+  }
+
+  // 時間切れになったときの共通演出：「時間切れです」を短く表示してから次へ進む
+  function showTimeoutOverlay(callback){
+    const overlay = document.createElement('div');
+    overlay.className = 'timeout-overlay';
+    overlay.innerHTML = '<div class="timeout-box">時間切れです</div>';
+    document.body.appendChild(overlay);
+    setTimeout(function(){
+      overlay.remove();
+      callback();
+    }, 1200);
+  }
+
   function attrValue(product, key){ return product.attrs[key]; }
   function formatValue(key, val){
     // 上書き(overrides)された数値は元データの単位が失われているため、
@@ -485,9 +564,10 @@
 
     let html = '';
     html += '<div class="top"><span class="eyebrow">SITE 4 / ' + goodLabel + '（1回目）</span>' +
-            '<span class="progress">STEP ' + currentStepNo() + ' / ' + TOTAL_STEPS + '（候補' + size + '個）</span></div>';
+            '<span class="progress">STEP ' + currentStepNo() + ' / ' + TOTAL_STEPS + '（候補' + size + '個）</span>' +
+            '<span class="timer-badge" id="timerBadge"></span></div>';
     html += '<h1>今回選ぶなら、どちらにしますか？</h1>';
-    html += '<p class="desc">左側は今回の基準となる商品です。右側をスクロールして他の候補と見比べ、気になったものをクリックしてください。左側をクリックすればそのまま選び続けられます。</p>';
+    html += '<p class="desc">左側は今回の基準となる商品です。右側をスクロールして他の候補と見比べ、気になったものをクリックしてください。左側をクリックすればそのまま選び続けられます。<b>制限時間は' + CO_TIME_LIMIT_SEC + '秒です。</b></p>';
     html += '<div class="slide-layout">' +
             '<div class="base-panel" id="basePanel"></div>' +
             '<div class="candidates-panel"><div class="grid" id="slideGrid"></div></div>' +
@@ -511,33 +591,53 @@
       grid.appendChild(buildCard(p, { isBase:false, hideImage:false, overrides:overrides }));
     });
 
+    let answered = false;
+
+    function commit(clickedId, timedOut){
+      const kept = (!timedOut && clickedId === baseItem.id);
+      const chosen = (!timedOut) ? products.find(function(p){ return p.id === clickedId; }) : null;
+
+      round1Records.push({
+        size: size,
+        baseId: baseItem.id,
+        baseName: baseItem.name,
+        baseRank: MID_RANK[size],
+        totalRanked: size + 1,
+        timedOut: !!timedOut,
+        chosenRank: timedOut ? null : (
+          (mandatory && mandatory.overridden && String(clickedId) === String(mandatory.id))
+            ? 1
+            : rankOf(picked.ranked, clickedId)
+        ),
+        presentedIds: presented.map(function(p){ return p.id; }),
+        mandatoryId: mandatory ? mandatory.id : null,
+        mandatoryName: mandatory ? mandatory.name : null,
+        mandatoryOverridden: mandatory ? mandatory.overridden : false,
+        mandatoryChosen: timedOut ? false : (mandatory ? (String(clickedId) === String(mandatory.id)) : false),
+        kept: kept,
+        chosenId: timedOut ? null : clickedId,
+        chosenName: timedOut ? '(回答なし/時間切れ)' : (chosen ? chosen.name : baseItem.name)
+      });
+
+      nextRound1Slide();
+    }
+
     const clickable = Array.from(basePanel.children).concat(Array.from(grid.children));
     clickable.forEach(function(cardEl){
       cardEl.addEventListener('click', function(){
+        if(answered) return;
+        answered = true;
+        timer.clear();
         const clickedId = Number(cardEl.dataset.id);
-        const kept = (clickedId === baseItem.id);
-        const chosen = products.find(function(p){ return p.id === clickedId; });
+        commit(clickedId, false);
+      });
+    });
 
-        round1Records.push({
-          size: size,
-          baseId: baseItem.id,
-          baseName: baseItem.name,
-          baseRank: MID_RANK[size],
-          totalRanked: size + 1,
-          chosenRank: (mandatory && mandatory.overridden && String(clickedId) === String(mandatory.id))
-            ? 1
-            : rankOf(picked.ranked, clickedId),
-          presentedIds: presented.map(function(p){ return p.id; }),
-          mandatoryId: mandatory ? mandatory.id : null,
-          mandatoryName: mandatory ? mandatory.name : null,
-          mandatoryOverridden: mandatory ? mandatory.overridden : false,
-          mandatoryChosen: mandatory ? (String(clickedId) === String(mandatory.id)) : false,
-          kept: kept,
-          chosenId: clickedId,
-          chosenName: chosen ? chosen.name : baseItem.name
-        });
-
-        nextRound1Slide();
+    const timer = startCountdown(CO_TIME_LIMIT_SEC, document.getElementById('timerBadge'), function(){
+      if(answered) return;
+      answered = true;
+      showTimeoutOverlay(function(){
+        commit(null, true);
       });
     });
   }
@@ -604,9 +704,10 @@
 
     let html = '';
     html += '<div class="top"><span class="eyebrow">SITE 4 / ' + goodLabel + '（2回目）</span>' +
-            '<span class="progress">STEP ' + currentStepNo() + ' / ' + TOTAL_STEPS + '（候補' + size + '個）</span></div>';
+            '<span class="progress">STEP ' + currentStepNo() + ' / ' + TOTAL_STEPS + '（候補' + size + '個）</span>' +
+            '<span class="timer-badge" id="timerBadge"></span></div>';
     html += '<h1>今回選ぶなら、どちらにしますか？</h1>';
-    html += '<p class="desc">左側は今回の基準となる商品です。右側をスクロールして他の候補と見比べ、気になったものをクリックしてください。</p>';
+    html += '<p class="desc">左側は今回の基準となる商品です。右側をスクロールして他の候補と見比べ、気になったものをクリックしてください。<b>制限時間は' + CO_TIME_LIMIT_SEC + '秒です。</b></p>';
     html += '<div class="slide-layout">' +
             '<div class="base-panel" id="basePanel"></div>' +
             '<div class="candidates-panel"><div class="grid" id="slideGrid"></div></div>' +
@@ -651,44 +752,66 @@
       grid.appendChild(buildCard(p, { isBase:false, hideImage:hideImage, overrides:overrides }));
     });
 
+    let answered = false;
+
+    function commit(clickedIdRaw, timedOut){
+      const kept = (!timedOut && clickedIdRaw === String(baseItem.id));
+      let chosenName;
+      if(timedOut){
+        chosenName = '(回答なし/時間切れ)';
+      } else if(kept){
+        chosenName = baseItem.name;
+      } else {
+        const chosen = presented.find(function(p){ return String(p.id) === clickedIdRaw; });
+        chosenName = chosen ? chosen.name : '';
+      }
+
+      round2Records.push({
+        size: size,
+        baseId: baseItem.id,
+        baseName: baseItem.name,
+        baseRank: MID_RANK[size],
+        totalRanked: size + 1,
+        timedOut: !!timedOut,
+        chosenRank: timedOut ? null : (
+          (mandatory && mandatory.overridden && !kept && clickedIdRaw === String(mandatory.id))
+            ? 1
+            : rankOf(picked.ranked, kept ? baseItem.id : clickedIdRaw)
+        ),
+        anchorId: anchor.id,
+        anchorName: anchor.name,
+        anchorScore: bestScore,
+        mandatoryId: mandatory ? mandatory.id : null,
+        mandatoryName: mandatory ? mandatory.name : null,
+        mandatoryOverridden: mandatory ? mandatory.overridden : false,
+        mandatoryChosen: timedOut ? false : (mandatory ? (clickedIdRaw === String(mandatory.id)) : false),
+        presentedIds: presented.map(function(p){ return p.id; }),
+        commonIds: Array.from(commonSet),
+        overrideFields: overrideFields,
+        kept: kept,
+        chosenId: timedOut ? null : clickedIdRaw,
+        chosenName: chosenName
+      });
+
+      nextRound2Slide();
+    }
+
     const clickable = Array.from(basePanel.children).concat(Array.from(grid.children));
     clickable.forEach(function(cardEl){
       cardEl.addEventListener('click', function(){
+        if(answered) return;
+        answered = true;
+        timer.clear();
         const clickedIdRaw = cardEl.dataset.id; // 文字列（基準財は数値ID、新候補は"b1"等）
-        const kept = (clickedIdRaw === String(baseItem.id));
-        let chosenName;
-        if(kept){
-          chosenName = baseItem.name;
-        } else {
-          const chosen = presented.find(function(p){ return String(p.id) === clickedIdRaw; });
-          chosenName = chosen ? chosen.name : '';
-        }
+        commit(clickedIdRaw, false);
+      });
+    });
 
-        round2Records.push({
-          size: size,
-          baseId: baseItem.id,
-          baseName: baseItem.name,
-          baseRank: MID_RANK[size],
-          totalRanked: size + 1,
-          chosenRank: (mandatory && mandatory.overridden && !kept && clickedIdRaw === String(mandatory.id))
-            ? 1
-            : rankOf(picked.ranked, kept ? baseItem.id : clickedIdRaw),
-          anchorId: anchor.id,
-          anchorName: anchor.name,
-          anchorScore: bestScore,
-          mandatoryId: mandatory ? mandatory.id : null,
-          mandatoryName: mandatory ? mandatory.name : null,
-          mandatoryOverridden: mandatory ? mandatory.overridden : false,
-          mandatoryChosen: mandatory ? (clickedIdRaw === String(mandatory.id)) : false,
-          presentedIds: presented.map(function(p){ return p.id; }),
-          commonIds: Array.from(commonSet),
-          overrideFields: overrideFields,
-          kept: kept,
-          chosenId: clickedIdRaw,
-          chosenName: chosenName
-        });
-
-        nextRound2Slide();
+    const timer = startCountdown(CO_TIME_LIMIT_SEC, document.getElementById('timerBadge'), function(){
+      if(answered) return;
+      answered = true;
+      showTimeoutOverlay(function(){
+        commit(null, true);
       });
     });
   }
@@ -736,7 +859,7 @@
       base: {}
     };
     round1Records.forEach(function(r){
-      round1Payload.results[r.size] = { kept: r.kept, chosenId: r.chosenId, chosenName: r.chosenName, chosenRank: r.chosenRank, totalRanked: r.totalRanked };
+      round1Payload.results[r.size] = { kept: r.kept, chosenId: r.chosenId, chosenName: r.chosenName, chosenRank: r.chosenRank, totalRanked: r.totalRanked, timedOut: r.timedOut };
       round1Payload.mandatory[r.size] = {
         mandatoryId: r.mandatoryId,
         mandatoryName: r.mandatoryName,
@@ -753,7 +876,7 @@
       base: {}
     };
     round2Records.forEach(function(r){
-      round2Payload.results[r.size] = { kept: r.kept, chosenId: r.chosenId, chosenName: r.chosenName, chosenRank: r.chosenRank, totalRanked: r.totalRanked };
+      round2Payload.results[r.size] = { kept: r.kept, chosenId: r.chosenId, chosenName: r.chosenName, chosenRank: r.chosenRank, totalRanked: r.totalRanked, timedOut: r.timedOut };
       round2Payload.commonality[r.size] = {
         anchorId: r.anchorId,
         anchorName: r.anchorName,
