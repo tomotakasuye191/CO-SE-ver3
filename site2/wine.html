@@ -645,7 +645,7 @@ function buildRedirectUrl(typeResult) {
 /* =========================================================================
    3. 送信先設定（★Apps Scriptのデプロイ後、ここにURLを貼り付ける★）
    ========================================================================= */
-const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbxDxVNaQ1POmiYbNWyxC-LdSIl9TQhvD84isd3StEddRWJlZ9ldv_LT96Xd0WAYi6XV/exec";
+const SCRIPT_URL = "https://script.google.com/macros/s/【ここにver3用の新しいデプロイIDを貼る】/exec";
 
 /* =========================================================================
    4. 画面制御・状態管理
@@ -770,7 +770,10 @@ function submitAnswers() {
   sendToSheet(typeResult);
 }
 
-function sendToSheet(typeResult) {
+function sendToSheet(typeResult, attempt) {
+  attempt = attempt || 0;
+  const attemptLabel = attempt > 0 ? '（自動再送信 ' + attempt + '/' + CONJOINT_RETRY_DELAYS_MS.length + ' 回目…）' : '';
+  document.getElementById('submit-status').textContent = '回答を記録しています…' + attemptLabel;
   // アテンションチェックの構成は財ごとに異なる（設けていない財もある）ため、
   // ATTENTION_CHECKSが存在する場合のみ、その内容に沿って動的に判定する。
   let attentionCheck1 = '';
@@ -829,12 +832,28 @@ function sendToSheet(typeResult) {
         document.getElementById('btn-retry-submit').style.display = 'none';
         window.location.href = buildRedirectUrl(typeResult);
       } else {
-        showSubmitError();
+        retryOrShowError(typeResult, attempt, (r1 && r1.message) || (r2 && r2.message) || '記録に失敗しました。');
       }
     })
     .catch(() => {
-      showSubmitError();
+      retryOrShowError(typeResult, attempt, '通信エラーが発生しました。');
     });
+}
+
+// 通信エラー・サーバーエラーいずれの場合も、間隔を空けながら自動で複数回リトライする。
+// 1,2,4,8,16秒間隔で最大5回自動リトライし、それでも失敗した場合だけ手動リトライの
+// ボタンを表示する（「Load failed」等、モバイル回線特有の一時的な通信断に強くするため）。
+const CONJOINT_RETRY_DELAYS_MS = [1000, 2000, 4000, 8000, 16000];
+
+function retryOrShowError(typeResult, attempt, message) {
+  if (attempt < CONJOINT_RETRY_DELAYS_MS.length) {
+    const delay = CONJOINT_RETRY_DELAYS_MS[attempt];
+    document.getElementById('submit-status').textContent =
+      message + '　' + Math.round(delay / 1000) + '秒後に自動で再送信します…';
+    setTimeout(() => { sendToSheet(typeResult, attempt + 1); }, delay);
+    return;
+  }
+  showSubmitError();
 }
 
 function showSubmitError() {
@@ -845,7 +864,7 @@ function showSubmitError() {
 document.getElementById('btn-retry-submit').addEventListener('click', () => {
   document.getElementById('submit-status').textContent = '回答を記録しています…';
   document.getElementById('btn-retry-submit').style.display = 'none';
-  sendToSheet(state.lastTypeResult);
+  sendToSheet(state.lastTypeResult, 0);
 });
 </script>
 </body>
