@@ -911,9 +911,16 @@
     sendCOPayload(payload);
   }
 
-  function sendCOPayload(payload, isAutoRetry){
+  // 通信エラー・サーバーエラーいずれの場合も、間隔を空けながら自動で複数回リトライする。
+  // 1,2,4,8,16秒間隔で最大5回自動リトライし、それでも失敗した場合だけ手動リトライの
+  // ボタンを表示する（「Load failed」等、モバイル回線特有の一時的な通信断に強くするため）。
+  const CO_RETRY_DELAYS_MS = [1000, 2000, 4000, 8000, 16000];
+
+  function sendCOPayload(payload, attempt){
+    attempt = attempt || 0;
+    const attemptLabel = attempt > 0 ? '（自動再送信 ' + attempt + '/' + CO_RETRY_DELAYS_MS.length + ' 回目…）' : '';
     app.innerHTML =
-      '<div class="loading-screen"><div class="spinner"></div><p>結果を記録しています…</p></div>';
+      '<div class="loading-screen"><div class="spinner"></div><p>結果を記録しています…' + attemptLabel + '</p></div>';
 
     fetch(GAS_URL, {
       method: 'POST',
@@ -932,32 +939,38 @@
       })
       .then(function(data){
         if(data.status !== 'ok'){
-          fail((data.message || '記録に失敗しました。') + '（回答データは保存されているので、再送信できます）',
-               function(){ sendCOPayload(payload); });
+          retryOrFail(payload, attempt, (data.message || '記録に失敗しました。'));
           return;
         }
         sessionStorage.removeItem('experiment_pendingCO_' + good);
         goToNext();
       }).catch(function(err){
-        if(!isAutoRetry){
-          // 1回だけ自動で再試行してから、ユーザーにエラーを見せる
-          setTimeout(function(){ sendCOPayload(payload, true); }, 800);
-          return;
-        }
-        fail('通信エラーが発生しました：' + err.message + '<br>回答データは保存されているので、再送信できます。',
-             function(){ sendCOPayload(payload); });
+        retryOrFail(payload, attempt, '通信エラーが発生しました：' + err.message);
       });
+  }
+
+  function retryOrFail(payload, attempt, message){
+    if(attempt < CO_RETRY_DELAYS_MS.length){
+      const delay = CO_RETRY_DELAYS_MS[attempt];
+      app.innerHTML =
+        '<div class="loading-screen"><div class="spinner"></div><p>' + escapeHtml(message) +
+        '<br>' + Math.round(delay / 1000) + '秒後に自動で再送信します…</p></div>';
+      setTimeout(function(){ sendCOPayload(payload, attempt + 1); }, delay);
+      return;
+    }
+    fail(message + '<br>回答データは保存されているので、再送信できます。',
+         function(){ sendCOPayload(payload, 0); });
   }
 
   function goToNext(){
     if(current === '1'){
-      // 1財目のCOが終わった → 実験中は知識アンケードを挟まず、そのまま2財目のコンジョイントへ
-      const query = new URLSearchParams({ id:id, group:group, good1:good1, good2:good2, current:'2', gender:gender, age:age });
-      window.location.href = BASE_URL + 'site2/' + good2 + '.html?' + query.toString();
-    } else {
-      // 2財目のCOも終わった → ここで初めて、2財分の知識アンケードをまとめて実施する（財1から開始）
-      const query = new URLSearchParams({ id:id, group:group, good1:good1, good2:good2, gender:gender, age:age, qseq:'1' });
+      // 1財目のCOが終わった → まず1財目の知識アンケートへ（このアンケートの後、site5側で2財目のコンジョイントへ進む）
+      const query = new URLSearchParams({ id:id, group:group, good1:good1, good2:good2, current:'1', gender:gender, age:age });
       window.location.href = BASE_URL + 'site5/' + good1 + '.html?' + query.toString();
+    } else {
+      // 2財目のCOも終わった → 2財目の知識アンケートへ（このアンケートの後、site5側で完了ページへ進む）
+      const query = new URLSearchParams({ id:id, group:group, good1:good1, good2:good2, current:'2', gender:gender, age:age });
+      window.location.href = BASE_URL + 'site5/' + good2 + '.html?' + query.toString();
     }
   }
 
