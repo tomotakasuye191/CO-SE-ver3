@@ -4,7 +4,7 @@
    ========================================================================= */
 window.EXP_CONFIG = {
   // Apps Script のウェブアプリURL（新しいスプレッドシート＋新しいデプロイで発行されたもの）
-  GAS_URL: "【ここに新しいデプロイのURLを貼る】",
+  GAS_URL: "https://script.google.com/macros/s/AKfycbxDxVNaQ1POmiYbNWyxC-LdSIl9TQhvD84isd3StEddRWJlZ9ldv_LT96Xd0WAYi6XV/exec",
   // このサイトの公開URL（末尾スラッシュあり）
   BASE_URL: "https://tomotakasuye191.github.io/CO-SE-ver3/",
   // CO画面の制限時間（秒）。0 = 制限なし（ver2）。ver3 は 25
