@@ -617,7 +617,12 @@
         aprimeExpected: round === 2 ? window.CODesign.APRIME_COUNT[size] : 0,
         aprimeShort: (round === 2 && items.filter(function(x){ return x.isAprime; }).length < window.CODesign.APRIME_COUNT[size]) ? 1 : 0,
         aprimeIds: items.filter(function(x){ return x.isAprime; }).map(function(x){ return String(x.p.id); }),
-        aprimeFallbackIds: items.filter(function(x){ return x.isAprime && x.apOk === false; }).map(function(x){ return String(x.p.id); })
+        aprimeFallbackIds: items.filter(function(x){ return x.isAprime && x.apOk === false; }).map(function(x){ return String(x.p.id); }),
+        aprimeModified: items.filter(function(x){ return x.isAprime && x.apMods; }).map(function(x){
+          return String(x.p.id) + ':' + Object.keys(x.apMods).map(function(a){
+            return (DEF.attrLabels[a] || a) + '=' + ((DEF.dispLabels && DEF.dispLabels[a]) || DEF.labels[a])[x.apMods[a]];
+          }).join('+');
+        })
       });
       choiceLog.push({ round: round, size: size, timedOut: !!timedOut, kept: kept,
         product: timedOut ? null : (kept ? SQ : (chosen ? chosen.p : null)),
